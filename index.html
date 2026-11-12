@@ -114,6 +114,8 @@
                 <div class="flex items-center gap-2.5">
                     
                     <!-- Dark / Light Theme Toggle Switch -->
+                    <select id="exam-select" onchange="openExam(this.value)" title="পরীক্ষা পরিবর্তন করুন" class="hidden max-w-[9.5rem] sm:max-w-[18rem] px-2.5 py-2 text-xs font-bold rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 focus:outline-none focus:border-emerald-500"></select>
+
                     <button id="theme-toggle-btn" class="p-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition" title="থিম পরিবর্তন">
                         <i id="theme-toggle-icon" class="fa-solid fa-moon text-base"></i>
                     </button>
@@ -128,7 +130,7 @@
     <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
         <!-- Hero Card & Summary Bar -->
-        <div id="hero-banner" class="mb-8 rounded-3xl bg-gradient-to-r from-emerald-800 via-teal-800 to-slate-900 text-white p-6 sm:p-8 shadow-xl relative overflow-hidden">
+        <div id="hero-banner" class="hidden mb-8 rounded-3xl bg-gradient-to-r from-emerald-800 via-teal-800 to-slate-900 text-white p-6 sm:p-8 shadow-xl relative overflow-hidden">
             <!-- Decorative Background SVG Graphic -->
             <div class="absolute -right-10 -bottom-10 opacity-10 pointer-events-none">
                 <span class="text-[180px] font-serif font-black text-amber-300">A</span>
@@ -146,7 +148,6 @@
                 </p>
 
                 <div class="mt-5 flex items-center justify-between text-xs font-bold text-emerald-100"><span><span class="q-count-text">০</span>টি MCQ</span><span id="hero-progress-text">০% সম্পন্ন</span></div>
-                <button id="change-exam-btn" onclick="backToExamList()" class="hidden mt-3 px-3 py-1.5 rounded-xl text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/20 transition"><i class="fa-solid fa-list mr-1"></i> অন্য পরীক্ষা</button>
 
                 <!-- Progress Bar -->
                 <div class="mt-4 w-full bg-slate-700/50 rounded-full h-2 overflow-hidden">
@@ -159,7 +160,7 @@
         <section id="tab-content-practice" class="space-y-6">
             
             <!-- Controls Bar (Filter & Actions) -->
-            <div class="bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-wrap items-center justify-between gap-4">
+            <div id="practice-controls" class="hidden bg-white dark:bg-slate-800 p-4 rounded-2xl shadow-sm border border-slate-200/80 dark:border-slate-700 flex flex-wrap items-center justify-between gap-4">
                 
                 <!-- Filter Pills -->
                 <div class="flex items-center gap-1.5 flex-wrap text-xs">
@@ -190,12 +191,12 @@
             <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
                 
                 <!-- Questions List Container (Left 3 cols) -->
-                <div class="lg:col-span-3 space-y-4" id="practice-questions-container">
+                <div class="lg:col-span-4 space-y-4" id="practice-questions-container" style="scroll-margin-top:84px">
                     <!-- Dynamic Question Cards Rendered Here -->
                 </div>
 
                 <!-- Side Quick-Jump OMR Palette (Right 1 col) -->
-                <div class="lg:col-span-1 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm sticky top-20">
+                <div id="practice-side-panel" class="hidden lg:col-span-1 bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm sticky top-20">
                     <div class="flex items-center justify-between mb-3 pb-2 border-b border-slate-100 dark:border-slate-700">
                         <h3 class="font-bold text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">
                             <i class="fa-solid fa-grip"></i> নেভিগেটর (১-<span class="q-count-text">০</span>)
@@ -260,12 +261,6 @@
             detectExams();
         });
 
-        // Trigger MathJax re-render safely
-        function triggerMathJax() {
-            if (window.MathJax && window.MathJax.typesetPromise) {
-                window.MathJax.typesetPromise().catch((err) => console.log('MathJax error:', err));
-            }
-        }
 
         function updateAllCounts() {
             const countStr = toBn(questionsData.length);
@@ -291,8 +286,31 @@
         // Tab Switching Logic
         // --- PRACTICE MODE FUNCTIONS ---
 
+        const PAGE_SIZE = 25;
+        let currentPage = 1;
+
+        // MathJax: typeset only the given elements, strictly one batch after another (in order).
+        let mjQueue = Promise.resolve();
+        function typesetEls(els) {
+            els = (els || []).filter(Boolean);
+            if (!els.length) return;
+            mjQueue = mjQueue.then(() => new Promise(resolve => {
+                let tries = 0;
+                const run = () => {
+                    const M = window.MathJax;
+                    if (M && M.typesetPromise) {
+                        const ready = (M.startup && M.startup.promise) ? M.startup.promise : Promise.resolve();
+                        ready.then(() => M.typesetPromise(els)).catch(e => console.log('MathJax error:', e)).then(resolve);
+                    } else if (++tries > 100) resolve();   // MathJax never loaded (offline) – give up after ~20s
+                    else setTimeout(run, 200);
+                };
+                run();
+            }));
+        }
+
         function setFilter(filter) {
             currentFilter = filter;
+            currentPage = 1;
             ['all', 'unanswered', 'answered', 'bookmarked'].forEach(f => {
                 const btn = document.getElementById(`btn-filter-${f}`);
                 if (f === filter) {
@@ -308,49 +326,58 @@
             return questionsData.filter(q => {
                 const isAnswered = userAnswers[q.id] !== undefined;
                 const isBookmarked = bookmarks.has(q.id);
-
                 if (currentFilter === 'answered' && !isAnswered) return false;
                 if (currentFilter === 'unanswered' && isAnswered) return false;
                 if (currentFilter === 'bookmarked' && !isBookmarked) return false;
-
                 return true;
             });
         }
 
+        // Full render (load / filter / reset)
         function renderPracticeView() {
+            const has = questionsData.length > 0;
+            document.getElementById('hero-banner').classList.toggle('hidden', !has);
+            document.getElementById('practice-controls').classList.toggle('hidden', !has);
+            document.getElementById('practice-side-panel').classList.toggle('hidden', !has);
+            document.getElementById('practice-questions-container').classList.toggle('lg:col-span-4', !has);
+            document.getElementById('practice-questions-container').classList.toggle('lg:col-span-3', has);
             renderPracticeSideGrid();
             renderPracticeQuestions();
             updateCounters();
-            triggerMathJax();
+        }
+
+        const SIDE_BASE = "w-7 h-7 rounded-lg text-[11px] font-bold flex items-center justify-center transition ";
+        function sideBtnClass(q) {
+            const a = userAnswers[q.id];
+            if (a === undefined) return SIDE_BASE + "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200";
+            return SIDE_BASE + (a === q.answer ? "bg-emerald-500 text-white font-bold" : "bg-rose-500 text-white font-bold");
+        }
+        function updateSideBtn(q) {
+            const b = document.getElementById(`sg-${q.id}`);
+            if (b) b.className = sideBtnClass(q);
         }
 
         function renderPracticeSideGrid() {
             const grid = document.getElementById('practice-side-grid');
             grid.innerHTML = '';
-
-            if (questionsData.length === 0) {
-                grid.innerHTML = `<span class="col-span-6 text-[10px] text-slate-400 text-center py-2">কোনো প্রশ্ন নেই</span>`;
-                return;
-            }
-
+            if (questionsData.length === 0) return;
+            const frag = document.createDocumentFragment();
             questionsData.forEach(q => {
-                const isAnswered = userAnswers[q.id] !== undefined;
-                const isCorrect = isAnswered && userAnswers[q.id] === q.answer;
-
-                let btnClass = "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200";
-                if (isAnswered) {
-                    btnClass = isCorrect ? "bg-emerald-500 text-white font-bold" : "bg-rose-500 text-white font-bold";
-                }
-
                 const btn = document.createElement('button');
-                btn.className = `w-7 h-7 rounded-lg text-[11px] font-bold flex items-center justify-center transition ${btnClass}`;
+                btn.id = `sg-${q.id}`;
+                btn.className = sideBtnClass(q);
                 btn.innerText = toBn(q.id);
                 btn.onclick = () => scrollToPracticeQ(q.id);
-                grid.appendChild(btn);
+                frag.appendChild(btn);
             });
+            grid.appendChild(frag);
         }
 
         function scrollToPracticeQ(id) {
+            let idx = getFilteredQuestions().findIndex(q => q.id === id);
+            if (idx === -1) { setFilter('all'); idx = questionsData.findIndex(q => q.id === id); }
+            const page = Math.floor(idx / PAGE_SIZE) + 1;
+            if (page !== currentPage) { currentPage = page; renderPracticeQuestions(); }
             const card = document.getElementById(`practice-q-${id}`);
             if (card) {
                 card.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -359,6 +386,95 @@
             }
         }
 
+        function goToPage(p, scroll = true) {
+            const total = Math.max(1, Math.ceil(getFilteredQuestions().length / PAGE_SIZE));
+            currentPage = Math.min(Math.max(1, p), total);
+            renderPracticeQuestions();
+            if (scroll) document.getElementById('practice-questions-container').scrollIntoView({ block: 'start' });
+        }
+
+        function pagerHTML(total, from, to, count) {
+            if (total <= 1) return '';
+            const nums = [];
+            for (let p = 1; p <= total; p++) {
+                if (p === 1 || p === total || Math.abs(p - currentPage) <= 1) nums.push(p);
+                else if (nums[nums.length - 1] !== '…') nums.push('…');
+            }
+            const btn = (label, page, active, disabled) => `<button onclick="goToPage(${page})" ${disabled ? 'disabled' : ''} class="min-w-[2rem] h-8 px-2 rounded-lg text-xs font-bold transition ${active ? 'bg-emerald-500 text-white' : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}">${label}</button>`;
+            return `<div class="bg-white dark:bg-slate-800 px-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-wrap items-center justify-between gap-2">
+                <span class="text-xs text-slate-500 dark:text-slate-400 font-semibold">প্রশ্ন ${toBn(from)}–${toBn(to)} / ${toBn(count)}</span>
+                <div class="flex items-center gap-1 flex-wrap">
+                    ${btn('<i class="fa-solid fa-chevron-left"></i>', currentPage - 1, false, currentPage === 1)}
+                    ${nums.map(n => n === '…' ? '<span class="px-1 text-slate-400">…</span>' : btn(toBn(n), n, n === currentPage, false)).join('')}
+                    ${btn('<i class="fa-solid fa-chevron-right"></i>', currentPage + 1, false, currentPage === total)}
+                </div>
+            </div>`;
+        }
+
+        function cardHTML(q) {
+            const selectedOpt = userAnswers[q.id];
+            const isAnswered = selectedOpt !== undefined;
+            const isBookmarked = bookmarks.has(q.id);
+            return `
+                <div id="practice-q-${q.id}" class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition">
+                    <div class="flex items-start justify-between gap-3 mb-4">
+                        <div class="flex items-start gap-2.5">
+                            <span class="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 mt-0.5">
+                                প্রশ্ন ${toBn(q.id)}
+                            </span>
+                            <h3 class="font-semibold text-slate-900 dark:text-slate-100 text-sm sm:text-base leading-snug">
+                                ${q.question}
+                            </h3>
+                        </div>
+                        <button onclick="toggleBookmark(${q.id})" class="text-slate-400 hover:text-amber-500 transition p-1" title="বুকমার্ক">
+                            <i class="${isBookmarked ? 'fa-solid text-amber-500' : 'fa-regular'} fa-bookmark text-base"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3">
+                        ${['A', 'B', 'C', 'D'].map(optKey => {
+                            const optText = q[`option${optKey}`];
+                            const bnLabel = { 'A': 'ক', 'B': 'খ', 'C': 'গ', 'D': 'ঘ' }[optKey];
+                            let optStyle = "border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-200";
+                            let badgeStyle = "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300";
+                            if (isAnswered) {
+                                if (optKey === q.answer) {
+                                    optStyle = "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold";
+                                    badgeStyle = "bg-emerald-500 text-white";
+                                } else if (selectedOpt === optKey) {
+                                    optStyle = "border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 font-semibold";
+                                    badgeStyle = "bg-rose-500 text-white";
+                                } else {
+                                    optStyle = "border-slate-200 dark:border-slate-700 opacity-50 text-slate-400";
+                                }
+                            }
+                            return `
+                                <button onclick="answerPractice(${q.id}, '${optKey}')"
+                                        ${isAnswered ? 'disabled' : ''}
+                                        class="w-full text-left p-3 rounded-xl border text-xs sm:text-sm flex items-center gap-3 transition ${optStyle}">
+                                    <span class="w-6 h-6 rounded-lg text-xs flex items-center justify-center font-bold shrink-0 ${badgeStyle}">
+                                        ${bnLabel}
+                                    </span>
+                                    <span class="flex-1">${optText}</span>
+                                    ${isAnswered && optKey === q.answer ? '<i class="fa-solid fa-circle-check text-emerald-600"></i>' : ''}
+                                    ${isAnswered && selectedOpt === optKey && selectedOpt !== q.answer ? '<i class="fa-solid fa-circle-xmark text-rose-600"></i>' : ''}
+                                </button>
+                            `;
+                        }).join('')}
+                    </div>
+                    ${isAnswered ? `
+                        <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 p-3.5 rounded-xl space-y-1">
+                            <div class="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                                <i class="fa-solid fa-lightbulb"></i> সমাধান / ব্যাখ্যা:
+                            </div>
+                            <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                                ${q.explanation || 'কোনো ব্যাখ্যা দেওয়া নেই।'}
+                            </p>
+                        </div>
+                    ` : ''}
+                </div>`;
+        }
+
+        // Renders only the current page (25 questions) and typesets only that batch.
         function renderPracticeQuestions() {
             const container = document.getElementById('practice-questions-container');
 
@@ -368,111 +484,60 @@
             }
 
             const filtered = getFilteredQuestions();
-
             if (filtered.length === 0) {
                 container.innerHTML = `
                     <div class="bg-white dark:bg-slate-800 p-12 rounded-3xl text-center border border-slate-200 dark:border-slate-700">
                         <i class="fa-solid fa-folder-open text-4xl text-slate-300 dark:text-slate-600 mb-2"></i>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">কোনো প্রশ্ন পাওয়া যায়নি</p>
-                    </div>
-                `;
+                        <p class="text-xs text-slate-500 dark:text-slate-400">কোনো প্রশ্ন পাওয়া যায়নি</p>
+                    </div>`;
                 return;
             }
 
-            container.innerHTML = filtered.map(q => {
-                const selectedOpt = userAnswers[q.id];
-                const isAnswered = selectedOpt !== undefined;
-                const isBookmarked = bookmarks.has(q.id);
+            const total = Math.ceil(filtered.length / PAGE_SIZE);
+            currentPage = Math.min(Math.max(1, currentPage), total);
+            const start = (currentPage - 1) * PAGE_SIZE;
+            const pageItems = filtered.slice(start, start + PAGE_SIZE);
+            const pager = pagerHTML(total, start + 1, start + pageItems.length, filtered.length);
 
-                return `
-                    <div id="practice-q-${q.id}" class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm transition">
-                        
-                        <!-- Header -->
-                        <div class="flex items-start justify-between gap-3 mb-4">
-                            <div class="flex items-start gap-2.5">
-                                <span class="bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 text-xs font-bold px-2.5 py-1 rounded-lg shrink-0 mt-0.5">
-                                    প্রশ্ন ${toBn(q.id)}
-                                </span>
-                                <h3 class="font-semibold text-slate-900 dark:text-slate-100 text-sm sm:text-base leading-snug">
-                                    ${q.question}
-                                </h3>
-                            </div>
-                            <button onclick="toggleBookmark(${q.id})" class="text-slate-400 hover:text-amber-500 transition p-1" title="বুকমার্ক">
-                                <i class="${isBookmarked ? 'fa-solid text-amber-500' : 'fa-regular'} fa-bookmark text-base"></i>
-                            </button>
-                        </div>
+            container.innerHTML = pager + pageItems.map(cardHTML).join('') + pager;
+            typesetEls([container]);
+        }
 
-                        <!-- Options -->
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-3">
-                            ${['A', 'B', 'C', 'D'].map(optKey => {
-                                const optText = q[`option${optKey}`];
-                                const bnLabel = { 'A': 'ক', 'B': 'খ', 'C': 'গ', 'D': 'ঘ' }[optKey];
-
-                                let optStyle = "border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 text-slate-700 dark:text-slate-200";
-                                let badgeStyle = "bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300";
-
-                                if (isAnswered) {
-                                    if (optKey === q.answer) {
-                                        optStyle = "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 font-semibold";
-                                        badgeStyle = "bg-emerald-500 text-white";
-                                    } else if (selectedOpt === optKey) {
-                                        optStyle = "border-rose-500 bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 font-semibold";
-                                        badgeStyle = "bg-rose-500 text-white";
-                                    } else {
-                                        optStyle = "border-slate-200 dark:border-slate-700 opacity-50 text-slate-400";
-                                    }
-                                }
-
-                                return `
-                                    <button onclick="answerPractice(${q.id}, '${optKey}')"
-                                            ${isAnswered ? 'disabled' : ''}
-                                            class="w-full text-left p-3 rounded-xl border text-xs sm:text-sm flex items-center gap-3 transition ${optStyle}">
-                                        <span class="w-6 h-6 rounded-lg text-xs flex items-center justify-center font-bold shrink-0 ${badgeStyle}">
-                                            ${bnLabel}
-                                        </span>
-                                        <span class="flex-1">${optText}</span>
-                                        ${isAnswered && optKey === q.answer ? '<i class="fa-solid fa-circle-check text-emerald-600"></i>' : ''}
-                                        ${isAnswered && selectedOpt === optKey && selectedOpt !== q.answer ? '<i class="fa-solid fa-circle-xmark text-rose-600"></i>' : ''}
-                                    </button>
-                                `;
-                            }).join('')}
-                        </div>
-
-                        <!-- Explanation Accordion -->
-                        ${isAnswered ? `
-                            <div class="mt-3 pt-3 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 p-3.5 rounded-xl space-y-1">
-                                <div class="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                                    <i class="fa-solid fa-lightbulb"></i> সমাধান / ব্যাখ্যা:
-                                </div>
-                                <p class="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-                                    ${q.explanation || 'কোনো ব্যাখ্যা দেওয়া নেই।'}
-                                </p>
-                            </div>
-                        ` : ''}
-
-                    </div>
-                `;
-            }).join('');
+        // Replace just one card in place (no full re-render)
+        function refreshCard(qId) {
+            const q = questionsData.find(item => item.id === qId);
+            const old = document.getElementById(`practice-q-${qId}`);
+            if (!q || !old) return;
+            const t = document.createElement('template');
+            t.innerHTML = cardHTML(q).trim();
+            const fresh = t.content.firstElementChild;
+            old.replaceWith(fresh);
+            typesetEls([fresh]);
         }
 
         function answerPractice(qId, optKey) {
+            if (userAnswers[qId] !== undefined) return;
             userAnswers[qId] = optKey;
-            
-            renderPracticeView();
+            refreshCard(qId);
+            const q = questionsData.find(item => item.id === qId);
+            if (q) updateSideBtn(q);
+            updateCounters();
         }
 
         function toggleBookmark(qId) {
             if (bookmarks.has(qId)) bookmarks.delete(qId);
             else bookmarks.add(qId);
-
-            renderPracticeView();
+            if (currentFilter === 'bookmarked') renderPracticeQuestions();
+            else refreshCard(qId);
+            updateCounters();
         }
 
         function resetPracticeProgress() {
             if (confirm("আপনি কি অনুশীলনের উত্তরগুলো মুছে পুনরায় শুরু করতে চান?")) {
                 userAnswers = {};
+                currentPage = 1;
                 renderPracticeView();
-                }
+            }
         }
 
         function updateCounters() {
@@ -606,6 +671,7 @@
             files.sort((a, b) => a.name.localeCompare(b.name, 'bn', { numeric: true }));
             detectState.files = files;
             detectState.status = files.length ? 'found' : 'none';
+            populateExamSelect();
             if (direct && isCSVName(direct)) { openExam(csvFileName(direct)); return; }
             if (files.length === 1) { openExam(files[0].name); return; }   // single exam: start straight away
             renderPracticeView();
@@ -613,6 +679,8 @@
 
         async function openExam(name) {
             const item = detectState.files.find(f => f.name === name) || { name, url: null };
+            if (!name) return;
+            if (!item.name) return;
             detectState.message = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> প্রশ্ন লোড হচ্ছে...';
             detectState.ok = true;
             if (!questionsData.length) renderPracticeView();
@@ -625,17 +693,20 @@
             } catch (err) {
                 detectState.message = '<i class="fa-solid fa-circle-xmark text-rose-500 mr-1"></i> লোড করা যায়নি: ' + (err.message || err);
                 detectState.ok = false;
+                populateExamSelect();
                 renderPracticeView();
             }
         }
 
-        function backToExamList() {
-            questionsData = []; userAnswers = {}; bookmarks.clear();
-            detectState.message = '';
-            document.getElementById('change-exam-btn').classList.add('hidden');
-            document.getElementById('hero-main-title').textContent = 'পরীক্ষা নির্বাচন করুন';
-            document.getElementById('hero-description').textContent = 'নিচের তালিকা থেকে একটি পরীক্ষা বেছে নিয়ে অনুশীলন শুরু করুন।';
-            updateAllCounts(); renderPracticeView();
+        // Exam switcher pinned in the top bar (always visible, no scrolling needed)
+        function populateExamSelect() {
+            const sel = document.getElementById('exam-select');
+            if (!sel) return;
+            if (detectState.files.length < 2) { sel.classList.add('hidden'); return; }
+            sel.innerHTML = '<option value="">পরীক্ষা নির্বাচন করুন ▾</option>' +
+                detectState.files.map(f => `<option value="${f.name.replace(/"/g, '&quot;')}">${f.name.replace(/\.csv$/i, '').replace(/[-_]+/g, ' ').replace(/</g, '&lt;')}</option>`).join('');
+            sel.value = detectState.currentName || '';
+            sel.classList.remove('hidden');
         }
 
         function pickLocalCSV(input) {
@@ -800,8 +871,7 @@
         
                     detectState.message = '';
                     detectState.currentName = file.name;
-                    const chg = document.getElementById('change-exam-btn');
-                    if (chg) chg.classList.toggle('hidden', detectState.files.length < 2);
+                    populateExamSelect();
                     setFilter('all');
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                 } catch (err) {
